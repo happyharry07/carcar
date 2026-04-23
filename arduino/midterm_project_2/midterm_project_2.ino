@@ -81,7 +81,6 @@ void setup() {
     pinMode(IRpin_RR, INPUT);
 
     Serial.begin(115200);
-    Serial3.begin(115200);
     while (!Serial);
     Serial.println("Initializing HM-10...");
     
@@ -174,14 +173,10 @@ void loop() {
 }
 
 void Search() {
-    // Serial3.println("in Search()");
-    // Serial3.print("\n");
     // TODO: let your car search graph(maze) according to bluetooth command from computer(python code)
     // 若目前正在執行前一個動作，持續更新就好
     if (motion_busy) {
         update_motion();
-        // Serial3.println("motion busy");
-        // Serial3.print("\n");
         return;
     }
 
@@ -189,74 +184,66 @@ void Search() {
     if (_cmd_queue[0] == NOTHING) {
         tracking(irState);
         prev_node_state = is_node();
-        // Serial3.println("cmd_queue[0] empty");
         return;
     }
 
 
     bool current_node_state = is_node();
 
-    // 1. Check RFID
-    byte idSize = 0;
-    byte* id = rfid(idSize);
+//     // 1. Check RFID
+//     byte idSize = 0;
+//     byte* id = rfid(idSize);
 
-    if (id != 0) {
-        // Serial3.println("id");
-        unsigned long now = millis();
-        bool in_cooldown = (now - last_rfid_ms) < RFID_COOLDOWN_MS;
-        bool is_same_card = same_uid(id, idSize, last_uid, last_uid_size);
+//     if (id != 0) {
+//         unsigned long now = millis();
+//         bool in_cooldown = (now - last_rfid_ms) < RFID_COOLDOWN_MS;
+//         bool is_same_card = same_uid(id, idSize, last_uid, last_uid_size);
 
-        // 條件：不在 cooldown，或是不同卡 -> 允許觸發
-        if (!in_cooldown || !is_same_card) {
-            // send "i" + UID + '\n'
-            Serial3.print("i");
-            for (byte i = 0; i < idSize; i++) {
-                if (id[i] < 0x10) Serial3.print("0");
-                Serial3.print(id[i], HEX);
-            }
-            Serial3.println();
+//         // 條件：不在 cooldown，或是不同卡 -> 允許觸發
+//         if (!in_cooldown || !is_same_card) {
+//             // send "i" + UID + '\n'
+//             Serial3.print("i");
+//             for (byte i = 0; i < idSize; i++) {
+//                 if (id[i] < 0x10) Serial3.print("0");
+//                 Serial3.print(id[i], HEX);
+//             }
+//             Serial3.println();
 
-#ifdef DEBUG
-            Serial.print("RFID detected, sent: i");
-            for (byte i = 0; i < idSize; i++) {
-                if (id[i] < 0x10) Serial.print("0");
-                Serial.print(id[i], HEX);
-            }
-            Serial.println();
-#endif
+// #ifdef DEBUG
+//             Serial.print("RFID detected, sent: i");
+//             for (byte i = 0; i < idSize; i++) {
+//                 if (id[i] < 0x10) Serial.print("0");
+//                 Serial.print(id[i], HEX);
+//             }
+//             Serial.println();
+// #endif
 
-            // like node event: execute + shift queue
-            execute_command(_cmd_queue[0]);
-            shift_queue_after_execute();
+//             // like node event: execute + shift queue
+//             execute_command(_cmd_queue[0]);
+//             shift_queue_after_execute();
 
-            // update dedup states
-            last_rfid_ms = now;
-            last_uid_size = idSize;
-            for (byte i = 0; i < idSize; i++) last_uid[i] = id[i];
+//             // update dedup states
+//             last_rfid_ms = now;
+//             last_uid_size = idSize;
+//             for (byte i = 0; i < idSize; i++) last_uid[i] = id[i];
 
-            prev_node_state = current_node_state;
-            return;
-        }
-    }
+//             prev_node_state = current_node_state;
+//             return;
+//         }
+//     }
     
     // 2. Check if we just enter a node
     if (current_node_state && !prev_node_state) {
         
-        // Serial3.println("node");
         // Notify Python about the node and request next command
         Serial3.println("n");
         
         // Execute the current command from the queue
         execute_command(_cmd_queue[0]);
         shift_queue_after_execute();
-
-    } 
-    else if (!current_node_state) {
-        
-        // Serial3.println("track");
-        // Serial3.print("\n");
-        tracking(irState);
     }
+
+    tracking(irState);
     
     // Update previous node state
     prev_node_state = current_node_state;

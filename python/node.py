@@ -34,7 +34,11 @@ class Node:
         # TODO : if node is adjacent to the present node, return the direction of node from the present node
         # For example, if the direction of node from the present node is EAST, then return Direction.EAST = 4
         # However, if node is not adjacent to the present node, print error message and return 0
-        return
+        for successor, direction, _ in self.successors:
+            if successor == node:
+                return direction
+        print(f"Error: Node {node.get_index() if hasattr(node, 'get_index') else node} is not adjacent to Node {self.index}")
+        return 0;
 
     def is_successor(self, node):
         for succ in self.successors:
