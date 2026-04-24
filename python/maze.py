@@ -2,10 +2,12 @@ import csv
 import logging
 import math
 from enum import IntEnum
-from typing import List
+from typing import List, Dict, Tuple
 
 import numpy as np
 import pandas
+import itertools
+
 
 from node import Direction, Node
 
@@ -29,6 +31,8 @@ class Maze:
         self.raw_data = pandas.read_csv(filepath).values
         self.nodes = []
         self.node_dict = dict()  # key: index, value: the correspond node
+        self.deadends = []  # List to store deadend nodes
+        self.initial_dir = Direction.NORTH
         
         # Create nodes from the raw data
         row, _ = self.raw_data.shape
@@ -46,6 +50,19 @@ class Maze:
                     successor_idx = int(self.raw_data[i][j])
                     if successor_idx in self.node_dict:
                         current_node.set_successor(self.node_dict[successor_idx], j)
+        
+        # Find all deadends in the maze
+        self.find_deadends()
+
+    def find_deadends(self):
+        """Identify all deadends in the maze and store them in self.deadends"""
+        self.deadends = []
+        for node_idx, maze_node in self.node_dict.items():
+            if len(maze_node.get_successors()) == 1:
+                self.deadends.append(maze_node)
+        
+        log.info(f"Found {len(self.deadends)} deadends in the maze")
+        return self.deadends
 
     def get_start_point(self):
         if len(self.node_dict) < 2:
@@ -59,17 +76,10 @@ class Maze:
     def BFS(self, node: Node):
         # TODO : design your data structure here for your algorithm
         # Tips : return a sequence of nodes from the node to the nearest unexplored deadend
-        # Design data structure for finding path to nearest unexplored deadend
-        # A deadend is a node with only one connection
         start_idx = node.get_index()
         
-        # Find all deadends in the maze
-        deadends = []
-        for node_idx, maze_node in self.node_dict.items():
-            if len(maze_node.get_successors()) == 1:
-                deadends.append(maze_node)
-        
-        if not deadends:
+        # Use the precomputed deadends list
+        if not self.deadends:
             log.error("No deadends found in the maze")
             return []
         
@@ -77,7 +87,7 @@ class Maze:
         shortest_path = None
         shortest_length = float('inf')
         
-        for deadend in deadends:
+        for deadend in self.deadends:
             path = self.BFS_2(node, deadend)
             if path and (shortest_path is None or len(path) < shortest_length):
                 shortest_path = path
@@ -201,7 +211,7 @@ class Maze:
             return []
             
         actions = []
-        car_dir = Direction.NORTH  # Assuming initial direction is NORTH ########################################
+        car_dir = self.initial_dir  # Assuming initial direction is NORTH
         
         for i in range(len(nodes) - 1):
             action, car_dir = self.getAction(car_dir, nodes[i], nodes[i + 1])
@@ -213,15 +223,167 @@ class Maze:
 
     def actions_to_str(self, actions):
         # cmds should be a string sequence like "fbrl....", use it as the input of BFS checklist #1
-        cmd = "fbrls"
+        cmd = "fbrlh"
         cmds = ""
         for action in actions:
             cmds += cmd[action - 1]
         log.info(cmds)
         return cmds
 
+    # strategy: find a path that visits all deadends
     def strategy(self, node: Node):
-        return self.BFS(node)
+        # Use the precomputed deadend list and find shortest path through all deadends
+        if not self.deadends:
+            log.warning("No deadends found in the maze")
+            return []
+        
+        # Create a 2D paths list to store paths between each pair of deadends
+        # We'll also store the path length for easier access
+        num_deadends = len(self.deadends)
+        paths = [[None for _ in range(num_deadends)] for _ in range(num_deadends)]
+        distances = [[float('inf') for _ in range(num_deadends)] for _ in range(num_deadends)]
+        
+        log.info(f"Calculating paths between {num_deadends} deadends...")
+        # Calculate paths between each pair of deadends
+        for i in range(num_deadends):
+            for j in range(num_deadends):
+                if i != j:  # Skip calculating path from a deadend to itself
+                    paths[i][j] = self.BFS_2(self.deadends[i], self.deadends[j])
+                    if paths[i][j]:
+                        distances[i][j] = len(paths[i][j]) - 1  # -1 because the path includes both endpoints
+                    log.debug(f"Path from deadend {self.deadends[i].get_index()} to {self.deadends[j].get_index()}: {len(paths[i][j]) if paths[i][j] else 'No path'}")
+        
+        # Calculate paths from current node to each deadend
+        start_to_deadend_paths = [None] * num_deadends
+        start_to_deadend_distances = [float('inf')] * num_deadends
+        
+        for i in range(num_deadends):
+            start_to_deadend_paths[i] = self.BFS_2(node, self.deadends[i])
+            if start_to_deadend_paths[i]:
+                start_to_deadend_distances[i] = len(start_to_deadend_paths[i]) - 1
+        
+        # Now we'll use a simple nearest neighbor algorithm to find a path through all deadends
+        # This is a greedy approach and might not give the optimal solution, but it's a good starting point
+        
+        # We'll keep track of the unvisited deadends
+        unvisited = set(range(num_deadends))
+        
+        # Start with the closest deadend to the current node
+        current_idx = min(range(num_deadends), key=lambda i: start_to_deadend_distances[i])
+        unvisited.remove(current_idx)
+        
+        # Initialize the complete path with the path to the first deadend
+        complete_path = start_to_deadend_paths[current_idx]
+        
+        # Keep track of the current position (the last deadend we visited)
+        current_position = self.deadends[current_idx]
+        
+        # Visit all remaining deadends
+        while unvisited:
+            # Find the nearest unvisited deadend
+            next_idx = min(unvisited, key=lambda j: distances[current_idx][j])
+            unvisited.remove(next_idx)
+            
+            # Add the path to this deadend to the complete path (excluding the first node which is already in the path)
+            next_segment = paths[current_idx][next_idx]
+            if next_segment:
+                complete_path.extend(next_segment[1:])  # Skip the first node which is already in the path
+            else:
+                log.error(f"No path found from deadend {self.deadends[current_idx].get_index()} to {self.deadends[next_idx].get_index()}")
+                # If there's no path to a deadend, we can't complete the full tour
+                # You might want to handle this differently based on your requirements
+                continue
+            
+            # Update the current position
+            current_idx = next_idx
+            current_position = self.deadends[current_idx]
+        
+        return complete_path
 
-    def strategy_2(self, node_from: Node, node_to: Node):
-        return self.BFS_2(node_from, node_to)
+    def strategy_2(self, node: Node):
+        """
+        Brute-force all permutations of deadends to find the globally shortest route.
+        Return: a complete node path starting from `node` and visiting all deadends.
+        """
+        if not self.deadends:
+            log.warning("No deadends found in the maze")
+            return []
+
+        num_deadends = len(self.deadends)
+
+        # --- 1) Precompute shortest paths/distances between all deadend pairs ---
+        paths_dd = [[None for _ in range(num_deadends)] for _ in range(num_deadends)]
+        dist_dd = [[float("inf") for _ in range(num_deadends)] for _ in range(num_deadends)]
+
+        for i in range(num_deadends):
+            for j in range(num_deadends):
+                if i == j:
+                    # deadend to itself
+                    paths_dd[i][j] = [self.deadends[i]]
+                    dist_dd[i][j] = 0
+                else:
+                    p = self.BFS_2(self.deadends[i], self.deadends[j])
+                    if p:
+                        paths_dd[i][j] = p
+                        dist_dd[i][j] = len(p) - 1  # edge count
+
+        # --- 2) Precompute shortest paths/distances from start node to each deadend ---
+        paths_start = [None] * num_deadends
+        dist_start = [float("inf")] * num_deadends
+        for i in range(num_deadends):
+            p = self.BFS_2(node, self.deadends[i])
+            if p:
+                paths_start[i] = p
+                dist_start[i] = len(p) - 1
+
+        # 若有 deadend 從起點不可達，直接失敗
+        unreachable = [i for i in range(num_deadends) if dist_start[i] == float("inf")]
+        if unreachable:
+            log.error(f"Some deadends are unreachable from start: {unreachable}")
+            return []
+
+        # --- 3) Brute-force permutations ---
+        best_order = None
+        best_dist = float("inf")
+
+        all_idx = list(range(num_deadends))
+        for order in itertools.permutations(all_idx):
+            # distance = start -> first + sum(pairwise)
+            total = dist_start[order[0]]
+
+            feasible = True
+            for k in range(len(order) - 1):
+                d = dist_dd[order[k]][order[k + 1]]
+                if d == float("inf"):
+                    feasible = False
+                    break
+                total += d
+
+                # 小剪枝：已經不可能更好就跳
+                if total >= best_dist:
+                    feasible = False
+                    break
+
+            if feasible and total < best_dist:
+                best_dist = total
+                best_order = order
+
+        if best_order is None:
+            log.error("No feasible route that visits all deadends.")
+            return []
+
+        # --- 4) Reconstruct full node path from best order ---
+        complete_path = list(paths_start[best_order[0]])  # copy
+
+        for k in range(len(best_order) - 1):
+            seg = paths_dd[best_order[k]][best_order[k + 1]]
+            if not seg:
+                log.error("Unexpected missing segment during reconstruction.")
+                return []
+            complete_path.extend(seg[1:])  # skip duplicated joint node
+
+        log.info(
+            f"strategy_2 brute-force done. deadends={num_deadends}, best_dist={best_dist}, order="
+            f"{[self.deadends[i].get_index() for i in best_order]}"
+        )
+        return complete_path

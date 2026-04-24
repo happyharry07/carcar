@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 TEAM_NAME = "carcarcarcar"
 SERVER_URL = "http://carcar.ntuee.org/scoreboard"
 MAZE_FILE = "data/medium_maze.csv"
-BT_PORT = "COM7"
+BT_PORT = "COM14"
 
 
 def parse_args():
@@ -81,32 +81,40 @@ def main(mode: str, bt_port: str, team_name: str, server_url: str, maze_file: st
     # point = ScoreboardFake(team_name, "data/fakeUID.csv")
 
     bridge = setup_bridge(port=bt_port, expected_name=EXPECTED_NAME)
+
+    # Start signal (protocol-defined)
     bridge.send("s")
 
     if mode == "0":
-        log.info("Mode 0: For treasure-hunting")
+        log.info("Mode 0: Treasure-hunting (visit deadends by strategy)")
 
         node_dict = maze.get_node_dict()
-        if 1 not in node_dict or 12 not in node_dict:
-            log.error("Node 1 or Node 12 not found in maze.")
+        if 1 not in node_dict:
+            log.error("Node 1 not found in maze.")
             sys.exit(1)
 
         start_node = node_dict[1]
-        goal_node = node_dict[12]
 
-        # 1) BFS shortest node path
-        nodes_path = maze.BFS_2(start_node, goal_node)
+        # 1) Plan node path by strategy(): visit deadends
+        nodes_path = maze.strategy_2(start_node)
         if not nodes_path or len(nodes_path) < 2:
-            log.error("No valid path from node 1 to node 12.")
+            log.error("No valid strategy path generated.")
             sys.exit(1)
 
-        # 2) node path -> actions -> command string (f/b/r/l/s)
+        # 2) node path -> actions -> command string (f/b/r/l/h)
         actions = maze.getActions(nodes_path)
         if not actions:
             log.error("Failed to convert path to actions.")
             sys.exit(1)
 
+        # Append HALT at the end (mapped to 'h' in actions_to_str)
+        actions.append(Action.HALT)
+
         cmds = maze.actions_to_str(actions)
+        if cmds and cmds[0] == "f":
+            cmds = cmds[1:]
+        else:
+            log.warning(f"Expected first command to be 'f', but got: {cmds[:1]}")
         log.info(f"Planned commands: {cmds}")
 
         # 3) preload first 3 commands
@@ -115,19 +123,31 @@ def main(mode: str, bt_port: str, team_name: str, server_url: str, maze_file: st
             bridge.send(cmds[i])
             log.info(f"preload sent: {cmds[i]}")
 
-        # 4) send one command each time 'n' is received
+        # 4) send one command each time an event is received:
+        #    - "n": reached node
+        #    - "iXXXXXXXX": UID detected, also counts as an event tick
         next_idx = preload
         while next_idx < len(cmds):
             msg = wait_msg(bridge, timeout=None)  # blocking wait
+            if not msg:
+                continue
+
             if msg == "n":
                 bridge.send(cmds[next_idx])
                 log.info(f"sent: {cmds[next_idx]}")
                 next_idx += 1
 
-        log.info("arrive")
+            elif msg[0] == "i":
+                uid = msg[1:]
+                log.info("read uid: " + uid)
+                point.add_UID(uid)
+                log.info(point.get_current_score())
 
-                
-        
+                bridge.send(cmds[next_idx])
+                log.info(f"sent: {cmds[next_idx]}")
+                next_idx += 1
+
+        log.info("arrive")
 
     elif mode == "1":
         log.info("Mode 1: Self-testing mode.")
